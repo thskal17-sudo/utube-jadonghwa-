@@ -1,0 +1,146 @@
+"""전체 파이프라인 오케스트레이션: 폴더 + 설명 → mp4."""
+
+from __future__ import annotations
+
+import json
+import logging
+import re
+import shutil
+import time
+from dataclasses import dataclass, field, asdict
+from pathlib import Path
+from typing import List, Optional
+
+import numpy as np
+
+from .bgm import write_bgm
+from .captions import CaptionPlan, TemplateCaptionGenerator
+from .config import IMAGE_EXTENSIONS, SHORTS_MAX_SECONDS, SHORTS_MIN_SECONDS, ShortsConfig
+from .face_blur import FaceBlurResult, FaceDetector, blur_folder, load_image_rgb, load_manual_boxes
+from .fonts import find_korean_font
+from .render import render_video
+
+log = logging.getLogger(__name__)
+
+
+@dataclass
+class PipelineReport:
+    output: str
+    duration: float
+    resolution: str
+    photos_used: List[str]
+    faces_per_photo: List[int]
+    detector: str
+    review_sheet: Optional[str]
+    caption_plan: dict
+    bgm: Optional[str]
+    font: str
+    seconds_elapsed: float
+    warnings: List[str] = field(default_factory=list)
+
+    def save(self, path: Path) -> None:
+        path.write_text(json.dumps(asdict(self), ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _natural_key(p: Path):
+    return [int(s) if s.isdigit() else s.lower() for s in re.split(r"(\d+)", p.name)]
+
+
+def collect_images(input_dir: Path, max_photos: int) -> List[Path]:
+    """폴더의 사진을 이름순으로 모으고, 너무 많으면 균등 간격으로 골라낸다."""
+    files = sorted(
+        (p for p in Path(input_dir).iterdir() if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS),
+        key=_natural_key,
+    )
+    if not files:
+        raise FileNotFoundError(f"사진이 없습니다: {input_dir} (지원 확장자: {', '.join(sorted(IMAGE_EXTENSIONS))})")
+    if len(files) > max_photos:
+        idx = np.linspace(0, len(files) - 1, max_photos).round().astype(int)
+        files = [files[i] for i in idx]
+    return files
+
+
+def run_pipeline(
+    input_dir: Path,
+    description: str,
+    output: Path,
+    cfg: Optional[ShortsConfig] = None,
+    work_dir: Optional[Path] = None,
+    caption_plan: Optional[CaptionPlan] = None,
+) -> PipelineReport:
+    cfg = cfg or ShortsConfig()
+    t0 = time.time()
+    input_dir, output = Path(input_dir), Path(output)
+    work_dir = Path(work_dir) if work_dir else output.parent / f"{output.stem}_work"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    warnings: List[str] = []
+
+    if not (SHORTS_MIN_SECONDS <= cfg.duration <= SHORTS_MAX_SECONDS):
+        warnings.append(f"영상 길이 {cfg.duration:.1f}s 는 권장 범위({SHORTS_MIN_SECONDS:.0f}~{SHORTS_MAX_SECONDS:.0f}s) 밖입니다.")
+
+    # 0. 입력 수집
+    photos = collect_images(input_dir, cfg.max_photos)
+    log.info("[input] 사진 %d장 사용: %s", len(photos), ", ".join(p.name for p in photos))
+    font_path = find_korean_font(cfg.font_path)
+
+    # 1. 얼굴 블러
+    review_sheet: Optional[Path] = None
+    if cfg.blur:
+        detector = FaceDetector(backend=cfg.detector, yunet_model=cfg.yunet_model)
+        if detector.backend == "haar":
+            warnings.append(
+                "Haar cascade 로 얼굴을 감지했습니다. 측면·작은 얼굴을 놓치기 쉬우니 "
+                "`pip install mediapipe` 후 다시 실행하는 것을 권장합니다."
+            )
+        review_sheet = work_dir / "review_sheet.jpg"
+        manual = load_manual_boxes(cfg.manual_faces) if cfg.manual_faces else None
+        results = blur_folder(
+            photos, work_dir / "blurred", detector,
+            method=cfg.blur_method, padding=cfg.blur_padding, strength=cfg.blur_strength,
+            review_path=review_sheet, manual_boxes=manual,
+        )
+        if sum(r.face_count for r in results) == 0:
+            warnings.append("어떤 사진에서도 얼굴이 감지되지 않았습니다. 사진을 직접 확인하세요.")
+        no_face = [r.source.name for r in results if r.face_count == 0]
+        if no_face and len(no_face) < len(results):
+            warnings.append(f"얼굴이 하나도 감지되지 않은 사진: {', '.join(no_face)} — 검수 시트에서 확인하세요.")
+    else:
+        warnings.append("얼굴 블러를 건너뛰었습니다(--no-blur). 학생 얼굴이 그대로 노출됩니다.")
+        (work_dir / "blurred").mkdir(exist_ok=True)
+        results = []
+        for i, src in enumerate(photos):
+            dst = work_dir / "blurred" / f"{i:03d}_{src.stem}{src.suffix.lower()}"
+            shutil.copy2(src, dst)
+            results.append(FaceBlurResult(source=src, output=dst, boxes=[], detector="none"))
+
+    # 2·3. 자막 계획
+    if caption_plan is None:
+        caption_plan = TemplateCaptionGenerator(title=cfg.title, seed=cfg.seed).generate(description, photos, len(photos))
+    elif cfg.title:
+        caption_plan = CaptionPlan(cfg.title, caption_plan.captions, caption_plan.hashtags)
+    caption_plan = caption_plan.fitted(len(photos))
+    caption_plan.to_json(work_dir / "captions.json")
+
+    # 5. BGM
+    bgm_path = write_bgm(work_dir / f"bgm_{cfg.bgm_style}.wav", cfg.duration + 1.0, style=cfg.bgm_style, seed=cfg.seed)
+
+    # 4·6. 편집 + 렌더링
+    images = [load_image_rgb(r.output) for r in results]
+    render_video(images, caption_plan, output, cfg, font_path, bgm_path=bgm_path)
+
+    report = PipelineReport(
+        output=str(output),
+        duration=cfg.duration,
+        resolution=f"{cfg.width}x{cfg.height}",
+        photos_used=[str(p) for p in photos],
+        faces_per_photo=[r.face_count for r in results],
+        detector=results[0].detector if results else "none",
+        review_sheet=str(review_sheet) if review_sheet else None,
+        caption_plan=asdict(caption_plan),
+        bgm=str(bgm_path),
+        font=str(font_path),
+        seconds_elapsed=round(time.time() - t0, 1),
+        warnings=warnings,
+    )
+    report.save(work_dir / "report.json")
+    return report
