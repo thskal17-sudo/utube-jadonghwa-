@@ -63,3 +63,41 @@ def test_load_manual_boxes_rejects_bad_shape(tmp_path):
     f.write_text('{"a.jpg": [[1, 2, 3]]}', encoding="utf-8")
     with pytest.raises(ValueError):
         load_manual_boxes(f)
+
+
+# --- 감지기 선택/대체 동작 -------------------------------------------------
+def test_auto_backend_falls_back_when_mediapipe_init_fails(monkeypatch):
+    """auto 는 MediaPipe 가 깨져 있어도 죽지 않고 다른 감지기로 내려가야 한다.
+
+    mediapipe 0.10.30+ 에서 레거시 API 가 사라져 초기화가 실패했을 때
+    파이프라인 전체가 멈추던 문제에 대한 회귀 테스트.
+    """
+    from shorts_pipeline import face_blur, mp_compat
+
+    def boom(*a, **k):
+        raise mp_compat.MediaPipeUnavailable("테스트용 실패")
+
+    monkeypatch.setattr(face_blur, "mediapipe_available", lambda *a, **k: True)
+    monkeypatch.setattr(mp_compat, "FaceDetection", boom)
+    det = face_blur.FaceDetector(backend="auto")
+    assert det.backend in {"yunet", "haar"}
+    # 대체된 감지기로 실제 감지까지 되어야 한다
+    assert isinstance(det.detect(np.zeros((120, 120, 3), dtype=np.uint8)), list)
+
+
+def test_explicit_mediapipe_backend_raises_instead_of_silently_switching(monkeypatch):
+    from shorts_pipeline import face_blur, mp_compat
+
+    def boom(*a, **k):
+        raise mp_compat.MediaPipeUnavailable("테스트용 실패")
+
+    monkeypatch.setattr(mp_compat, "FaceDetection", boom)
+    with pytest.raises(mp_compat.MediaPipeUnavailable):
+        face_blur.FaceDetector(backend="mediapipe")
+
+
+def test_unknown_backend_raises():
+    from shorts_pipeline.face_blur import FaceDetector
+
+    with pytest.raises(ValueError):
+        FaceDetector(backend="없는감지기")

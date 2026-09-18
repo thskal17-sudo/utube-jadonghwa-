@@ -2,8 +2,9 @@
 
 감지기는 세 가지를 지원하고, backend="auto" 면 정확도 순으로 자동 선택한다.
 
-1. mediapipe : BlazeFace. 모델이 패키지에 포함돼 있어 추가 다운로드가 필요 없다.
-               측면·작은 얼굴 감지율이 가장 높아 기본값으로 권장한다.
+1. mediapipe : BlazeFace(전체 범위). 측면·작은 얼굴 감지율이 가장 높다.
+               버전에 따라 레거시 solutions API 또는 Tasks API 를 쓴다(mp_compat.py).
+               Tasks API(0.10.30~)는 모델 파일이 필요하다 → scripts/download_models.py
 2. yunet     : ONNX 모델. models/ 에 파일이 있으면 사용 (scripts/download_models.py).
 3. haar      : OpenCV 내장 Haar cascade. 항상 사용 가능한 최후의 대비책이지만
                측면·작은 얼굴을 자주 놓친다.
@@ -23,6 +24,9 @@ from typing import List, Optional, Sequence, Tuple
 import cv2
 import numpy as np
 from PIL import Image, ImageOps
+
+from . import mp_compat
+from .mp_compat import MediaPipeUnavailable
 
 log = logging.getLogger(__name__)
 
@@ -78,12 +82,13 @@ def merge_boxes(boxes: Sequence[Box], iou_thresh: float = 0.3) -> List[Box]:
     return kept
 
 
-def mediapipe_available() -> bool:
-    try:
-        import mediapipe  # noqa: F401
-    except ImportError:
-        return False
-    return True
+def mediapipe_available(face_model: Optional[Path] = None) -> bool:
+    """MediaPipe 얼굴 감지를 실제로 쓸 수 있는지.
+
+    임포트만 확인하면 안 된다. mediapipe 0.10.30+ 는 레거시 solutions API 가
+    없어서, 임포트에 성공해도 Tasks API 모델 파일이 없으면 쓸 수 없다.
+    """
+    return mp_compat.face_detection_ready(face_model)
 
 
 class FaceDetector:
@@ -104,12 +109,18 @@ class FaceDetector:
         self._mp = None
         self.backend = self._select_backend(backend, yunet_model)
 
-        if self.backend == "mediapipe":
-            self._init_mediapipe()
-        elif self.backend == "yunet":
-            self._init_yunet(yunet_model)
-        else:
-            self._init_haar()
+        try:
+            self._init_backend(self.backend, yunet_model)
+        except (MediaPipeUnavailable, FileNotFoundError, RuntimeError) as e:
+            # 명시 지정한 감지기는 조용히 바꾸지 않는다. auto 일 때만 대체한다.
+            if backend != "auto":
+                raise
+            # 방금 실패한 감지기를 다시 고르지 않는다.
+            use_yunet = self.backend != "yunet" and self._yunet_ready(yunet_model)
+            fallback = "yunet" if use_yunet else "haar"
+            log.warning("%s 감지기 초기화 실패 → %s 로 대체합니다: %s", self.backend, fallback, e)
+            self.backend = fallback
+            self._init_backend(fallback, yunet_model)
         log.info("[detector] %s 감지기를 사용합니다.", self.backend)
 
     # -- 백엔드 선택 --------------------------------------------------
@@ -119,6 +130,16 @@ class FaceDetector:
     def _yunet_ready(self, yunet_model: Optional[Path]) -> bool:
         p = self._yunet_path(yunet_model)
         return p.exists() and p.stat().st_size > 10_000 and hasattr(cv2, "FaceDetectorYN")
+
+    def _init_backend(self, backend: str, yunet_model: Optional[Path]) -> None:
+        if backend == "mediapipe":
+            self._init_mediapipe()
+        elif backend == "yunet":
+            self._init_yunet(yunet_model)
+        elif backend == "haar":
+            self._init_haar()
+        else:
+            raise ValueError(f"알 수 없는 감지기: {backend} (mediapipe | yunet | haar)")
 
     def _select_backend(self, backend: str, yunet_model: Optional[Path]) -> str:
         if backend != "auto":
@@ -135,14 +156,9 @@ class FaceDetector:
 
     # -- 백엔드별 초기화 ----------------------------------------------
     def _init_mediapipe(self) -> None:
-        try:
-            import mediapipe as mp
-        except ImportError as e:
-            raise RuntimeError("mediapipe 가 설치돼 있지 않습니다. `pip install mediapipe`") from e
-        # model_selection=1 → full range 모델. 단체 사진의 작은 얼굴에 강하다.
-        self._mp = mp.solutions.face_detection.FaceDetection(
-            model_selection=1, min_detection_confidence=self.score_threshold
-        )
+        # 레거시/Tasks 중 쓸 수 있는 API 를 호환 계층이 골라 준다.
+        self._mp = mp_compat.FaceDetection(min_confidence=self.score_threshold)
+        log.info("[detector] MediaPipe %s API 사용", self._mp.kind)
 
     def _init_yunet(self, yunet_model: Optional[Path]) -> None:
         model = self._yunet_path(yunet_model)
@@ -186,21 +202,8 @@ class FaceDetector:
         return merge_boxes(boxes)
 
     def _detect_mediapipe(self, img: np.ndarray) -> List[Box]:
-        h, w = img.shape[:2]
-        result = self._mp.process(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-        if not result.detections:
-            return []
-        boxes: List[Box] = []
-        for det in result.detections:
-            bb = det.location_data.relative_bounding_box
-            x, y = int(bb.xmin * w), int(bb.ymin * h)
-            bw, bh = int(bb.width * w), int(bb.height * h)
-            # 상대 좌표는 화면 밖으로 조금 넘칠 수 있다.
-            x, y = max(0, x), max(0, y)
-            bw, bh = min(bw, w - x), min(bh, h - y)
-            if bw > 1 and bh > 1:
-                boxes.append((x, y, bw, bh))
-        return boxes
+        # 화면 밖으로 넘친 좌표 정리는 호환 계층에서 한다.
+        return self._mp.detect(img)
 
     def _detect_yunet(self, img: np.ndarray) -> List[Box]:
         h, w = img.shape[:2]

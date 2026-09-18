@@ -28,6 +28,30 @@ def compute_scene_timing(n_scenes: int, total: float, transition: float) -> List
     return [(i * (d - transition), d) for i in range(n_scenes)]
 
 
+def compute_caption_timing(
+    timings: List[Tuple[float, float]],
+    first_lead: float = 0.35,
+    lead: float = 0.2,
+    tail: float = 0.15,
+    min_duration: float = 0.5,
+) -> List[Tuple[float, float]]:
+    """자막별 (시작 시각, 노출 길이).
+
+    장면은 크로스페이드만큼 겹치지만 자막은 겹쳐선 안 된다. 같은 위치에 두 문장이
+    동시에 그려지면 둘 다 읽을 수 없기 때문이다. 그래서 각 자막은 다음 자막이
+    뜨는 시점에 끝난다(마지막 자막만 장면 끝까지).
+    """
+    out: List[Tuple[float, float]] = []
+    for i, (start, dur) in enumerate(timings):
+        begin = start + (first_lead if i == 0 else lead)
+        if i + 1 < len(timings):
+            end = timings[i + 1][0] + lead  # 다음 자막이 뜨는 시점
+        else:
+            end = start + dur - tail
+        out.append((begin, max(min_duration, end - begin)))
+    return out
+
+
 def _overlay_clip(rgba: np.ndarray, start: float, duration: float, x: int, y: int, fade: float = 0.3, slide: int = 40) -> ImageClip:
     """RGBA 이미지를 (x, y)에 올리되, 아래에서 살짝 떠오르며 페이드인/아웃한다."""
     clip = ImageClip(rgba, transparent=True).with_start(start).with_duration(duration)
@@ -85,14 +109,13 @@ def render_video(
             clip = clip.with_effects([vfx.CrossFadeIn(min(cfg.transition, dur / 2))])
         layers.append(clip)
 
-    # 장면별 자막 (하단)
+    # 장면별 자막 (하단). 서로 겹치지 않는 구간에만 띄운다.
     cap_size = int(W * 0.052)
-    for i, (text, (start, dur)) in enumerate(zip(plan.captions, timings)):
+    for text, (start, dur) in zip(plan.captions, compute_caption_timing(timings)):
         rgba = render_text_block(text, font_path, cap_size, max_width=int(W * 0.88))
         x = (W - rgba.shape[1]) // 2
         y = int(H * 0.81) - rgba.shape[0] // 2
-        lead = 0.35 if i == 0 else 0.2
-        layers.append(_overlay_clip(rgba, start + lead, max(0.5, dur - lead - 0.15), x, y))
+        layers.append(_overlay_clip(rgba, start, dur, x, y, fade=min(0.3, dur / 3)))
 
     # 제목 (상단, 전체 구간)
     title_rgba = render_text_block(

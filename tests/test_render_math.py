@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from shorts_pipeline.kenburns import KenBurnsScene, KenBurnsParams, smoothstep
-from shorts_pipeline.render import compute_scene_timing
+from shorts_pipeline.render import compute_caption_timing, compute_scene_timing
 
 
 def test_scene_timing_total_duration():
@@ -53,3 +53,35 @@ def test_kenburns_frames_actually_move():
     scene = KenBurnsScene(img, 1080, 1920, 3.0, KenBurnsParams(1.0, 1.18, (-0.6, 0), (0.6, 0)))
     first, last = scene.frame(0.0), scene.frame(3.0)
     assert not np.array_equal(first, last)
+
+
+# --- 자막 타이밍 -----------------------------------------------------------
+@pytest.mark.parametrize("n,total", [(2, 15.0), (4, 18.0), (6, 18.0), (8, 20.0)])
+def test_caption_windows_do_not_overlap(n, total):
+    """전환 구간에서 자막 두 개가 동시에 그려지면 둘 다 읽을 수 없다."""
+    caps = compute_caption_timing(compute_scene_timing(n, total, 0.6))
+    for (s0, d0), (s1, _) in zip(caps, caps[1:]):
+        assert s0 + d0 <= s1 + 1e-9, f"{s0 + d0} > {s1}"
+
+
+def test_caption_windows_stay_inside_video():
+    total = 18.0
+    caps = compute_caption_timing(compute_scene_timing(5, total, 0.6))
+    assert caps[0][0] > 0
+    assert caps[-1][0] + caps[-1][1] <= total
+
+
+def test_caption_windows_are_long_enough_to_read():
+    caps = compute_caption_timing(compute_scene_timing(6, 18.0, 0.6))
+    assert all(d >= 1.0 for _, d in caps)
+
+
+def test_caption_timing_single_scene():
+    caps = compute_caption_timing([(0.0, 15.0)])
+    assert len(caps) == 1
+    assert caps[0] == pytest.approx((0.35, 14.5))
+
+
+def test_caption_timing_never_negative_for_short_scenes():
+    caps = compute_caption_timing(compute_scene_timing(8, 4.0, 0.6))
+    assert all(d > 0 for _, d in caps)

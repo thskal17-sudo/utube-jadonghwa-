@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from shorts_pipeline.config import ShortsConfig
+from shorts_pipeline.face_blur import mediapipe_available
 from shorts_pipeline.head_detect import (
     HEAD_LANDMARKS,
     PersonHeadDetector,
@@ -51,7 +52,16 @@ def test_build_detector_explicit_person_raises_without_weights(tmp_path):
         build_detector(cfg)
 
 
-@pytest.mark.parametrize("backend", ["mediapipe", "haar"])
+@pytest.mark.parametrize(
+    "backend",
+    [
+        pytest.param(
+            "mediapipe",
+            marks=pytest.mark.skipif(not mediapipe_available(), reason="mediapipe 없음"),
+        ),
+        "haar",  # OpenCV 내장이라 항상 사용 가능
+    ],
+)
 def test_build_detector_honours_explicit_face_backend(backend):
     det = build_detector(ShortsConfig(detector=backend))
     assert det.backend == backend
@@ -75,3 +85,22 @@ def test_person_detector_records_stats():
     det.detect(np.full((320, 320, 3), 180, dtype=np.uint8))
     for key in ("persons", "faces", "pose_heads", "fallbacks"):
         assert key in det.last_stats
+
+
+@pytest.mark.skipif(not HAS_MODEL, reason="YOLO 가중치 없음")
+def test_person_detector_works_without_mediapipe(monkeypatch):
+    """MediaPipe 를 못 써도 사람 검출 + 기하 추정으로 계속 동작해야 한다."""
+    from shorts_pipeline import mp_compat
+
+    def boom(*a, **k):
+        raise mp_compat.MediaPipeUnavailable("테스트용 실패")
+
+    monkeypatch.setattr(mp_compat, "FaceDetection", boom)
+    monkeypatch.setattr(mp_compat, "PoseHead", boom)
+
+    det = PersonHeadDetector()
+    assert det.missing_signals == ["얼굴 감지", "자세 추정"]
+    boxes = det.detect(np.full((320, 320, 3), 180, dtype=np.uint8))
+    assert isinstance(boxes, list)
+    assert det.last_stats["face_signal"] is False
+    assert det.last_stats["pose_signal"] is False

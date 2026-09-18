@@ -16,18 +16,24 @@
 
 YOLO 가중치(models/yolov8n.pt)가 없으면 이 감지기는 쓸 수 없고,
 파이프라인은 얼굴 전용 감지기로 자동 대체된다.
+
+MediaPipe(얼굴·자세)는 여기서 선택 사항이다. 버전·모델 문제로 쓸 수 없으면
+3번(사람 박스 상단 기하 추정)만으로 동작한다. 정확도는 떨어지지만 사람을
+찾는 한 머리 위치를 가리기는 하므로, 얼굴 전용 감지기보다 누락이 적다.
 """
 
 from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple
+from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
 
+from . import mp_compat
 from .face_blur import Box, merge_boxes
+from .mp_compat import MediaPipeUnavailable
 
 log = logging.getLogger(__name__)
 
@@ -35,7 +41,7 @@ MODELS_DIR = Path(__file__).resolve().parent.parent / "models"
 DEFAULT_YOLO_NAME = "yolov8n.pt"
 
 # MediaPipe Pose 랜드마크 0~10 = 코, 양눈(6), 양귀, 입 양끝
-HEAD_LANDMARKS = tuple(range(11))
+HEAD_LANDMARKS = tuple(range(mp_compat.HEAD_LANDMARK_COUNT))
 
 
 def yolo_weights_path(explicit: Optional[Path] = None) -> Path:
@@ -90,32 +96,33 @@ class PersonHeadDetector:
             from ultralytics import YOLO
         except ImportError as e:
             raise RuntimeError("ultralytics 가 설치돼 있지 않습니다. `pip install ultralytics`") from e
-        try:
-            import mediapipe as mp
-        except ImportError as e:
-            raise RuntimeError("mediapipe 가 설치돼 있지 않습니다. `pip install mediapipe`") from e
-
         self._yolo = YOLO(str(path))
-        self._mp = mp
         self.last_stats: dict = {}
+
+        # MediaPipe 는 선택 사항. 못 쓰면 사람 박스 기하 추정만으로 동작한다.
+        self.missing_signals: List[str] = []
+        self._face = self._try_open("얼굴 감지", lambda: mp_compat.FaceDetection(min_confidence=self.face_conf))
+        self._pose = self._try_open("자세 추정", lambda: mp_compat.PoseHead(min_confidence=0.2))
+
+    def _try_open(self, label: str, factory):
+        """MediaPipe 신호를 열어 본다. 못 열면 None 을 돌려주고 기록만 남긴다."""
+        try:
+            return factory()
+        except MediaPipeUnavailable as e:
+            log.warning("[detector] %s 를 쓸 수 없어 건너뜁니다: %s", label, e)
+            self.missing_signals.append(label)
+            return None
 
     # ---------------- 얼굴 ----------------
     def _faces_whole(self, img: np.ndarray) -> List[Box]:
-        H, W = img.shape[:2]
-        fd = self._mp.solutions.face_detection.FaceDetection(
-            model_selection=1, min_detection_confidence=self.face_conf
-        )
-        res = fd.process(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-        if not res.detections:
+        if self._face is None:
             return []
-        out = []
-        for d in res.detections:
-            b = d.location_data.relative_bounding_box
-            out.append((int(b.xmin * W), int(b.ymin * H), int(b.width * W), int(b.height * H)))
-        return out
+        return list(self._face.detect(img))
 
     def _faces_tiled(self, img: np.ndarray) -> List[Box]:
         """타일로 잘라 확대 후 감지. 멀리 있는 작은 얼굴을 잡는다."""
+        if self._face is None:
+            return []
         H, W = img.shape[:2]
         n = self.tiles
         th = int(H / n * (1 + self.tile_overlap))
@@ -128,37 +135,21 @@ class PersonHeadDetector:
                 if tile.size == 0:
                     continue
                 big = cv2.resize(tile, None, fx=up, fy=up, interpolation=cv2.INTER_CUBIC)
-                fd = self._mp.solutions.face_detection.FaceDetection(
-                    model_selection=1, min_detection_confidence=self.face_conf
-                )
-                res = fd.process(cv2.cvtColor(big, cv2.COLOR_BGR2RGB))
-                if not res.detections:
-                    continue
-                bh, bw = big.shape[:2]
-                for d in res.detections:
-                    b = d.location_data.relative_bounding_box
+                for (bx, by, bw_, bh_) in self._face.detect(big):
                     boxes.append((
-                        int(b.xmin * bw / up) + int(x0),
-                        int(b.ymin * bh / up) + int(y0),
-                        int(b.width * bw / up),
-                        int(b.height * bh / up),
+                        int(bx / up) + int(x0),
+                        int(by / up) + int(y0),
+                        int(bw_ / up),
+                        int(bh_ / up),
                     ))
         return boxes
 
     # ---------------- 자세 → 머리 ----------------
     def _head_from_pose(self, crop: np.ndarray) -> Optional[Tuple[float, float, float, float]]:
-        with self._mp.solutions.pose.Pose(
-            static_image_mode=True, model_complexity=1, min_detection_confidence=0.2
-        ) as pose:
-            res = pose.process(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
-        if not res.pose_landmarks:
+        if self._pose is None:
             return None
-        ch, cw = crop.shape[:2]
-        pts = [
-            (lm.x * cw, lm.y * ch)
-            for i, lm in enumerate(res.pose_landmarks.landmark)
-            if i in HEAD_LANDMARKS and lm.visibility > self.pose_visibility
-        ]
+        landmarks = self._pose.head_landmarks(crop)
+        pts = [(x, y) for x, y, vis in landmarks if vis > self.pose_visibility]
         if len(pts) < 2:
             return None
         xs = [p[0] for p in pts]
@@ -216,6 +207,7 @@ class PersonHeadDetector:
         self.last_stats = dict(
             persons=len(result.boxes), faces=len(faces), pose_heads=len(heads),
             pose_retried=retried, fallbacks=len(fallbacks),
+            face_signal=self._face is not None, pose_signal=self._pose is not None,
         )
 
         merged = merge_boxes([tuple(int(v) for v in b) for b in faces + heads + fallbacks], iou_thresh=0.35)

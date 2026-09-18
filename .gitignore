@@ -6,5 +6,8 @@ output/
 photos/
 models/*.onnx
 models/*.pt
+models/*.tflite
+models/*.task
+yolov8n*.pt
 *.mp4
 *.wav

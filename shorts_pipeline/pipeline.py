@@ -113,6 +113,13 @@ def run_pipeline(
                 "학생을 놓칩니다. `pip install ultralytics` 후 "
                 "`python scripts/download_models.py` 를 실행하면 사람 검출 기반으로 훨씬 잘 잡습니다."
             )
+        missing = getattr(detector, "missing_signals", None)
+        if missing:
+            warnings.append(
+                f"MediaPipe 신호({', '.join(missing)})를 쓸 수 없어 사람 박스 기하 추정만 사용했습니다. "
+                "가린 위치가 부정확할 수 있으니 `python scripts/download_models.py` 로 모델을 받고, "
+                "검수 시트를 특히 꼼꼼히 확인하세요."
+            )
         review_sheet = work_dir / "review_sheet.jpg"
         manual = load_manual_boxes(cfg.manual_faces) if cfg.manual_faces else None
         results = blur_folder(

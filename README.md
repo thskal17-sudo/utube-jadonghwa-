@@ -18,11 +18,26 @@
 
 ```bash
 pip install -r requirements.txt
-python scripts/download_models.py    # 사람 검출 모델 (강력 권장)
+sudo apt install libgles2 libegl1     # 리눅스 + 최신 mediapipe 인 경우
+python scripts/download_models.py     # 감지 모델 (강력 권장)
 ```
 
 `download_models.py` 는 인터넷 연결이 한 번 필요합니다. 건너뛰면 얼굴 전용 감지기로
 동작하는데, 교실 사진에서는 누락이 크게 늘어납니다.
+
+**mediapipe 0.10.30 이상을 쓸 때는 `download_models.py` 가 사실상 필수입니다.**
+그 버전부터 레거시 `mp.solutions` API 가 제거되고 모델이 패키지에서 빠졌기 때문에,
+모델 파일이 없으면 얼굴·자세 감지를 아예 쓸 수 없습니다. 0.10.21 이하라면 모델이
+패키지에 내장돼 있어 받을 필요가 없습니다. 어느 쪽이든 코드는
+`shorts_pipeline/mp_compat.py` 가 자동으로 판별하므로 따로 설정할 것은 없습니다.
+
+준비가 됐는지 확인하는 방법:
+
+```bash
+python -c "from shorts_pipeline import mp_compat as m; \
+print(m.mediapipe_version(), m.face_api_kind(), m.pose_api_kind())"
+# 예) 0.10.35 tasks tasks   ← 둘 다 None 이 아니면 정상
+```
 
 ffmpeg 은 `imageio-ffmpeg` 가 함께 설치하므로 따로 준비하지 않아도 됩니다.
 
@@ -55,7 +70,7 @@ python make_shorts.py ./photos/과학실험 \
 | `--duration` | 영상 길이(초) | `18` |
 | `--max-photos` | 사용할 최대 사진 수 | `8` |
 | `--bgm` | `bright` / `calm` / `energetic` | `bright` |
-| `--detector` | `auto` / `mediapipe` / `yunet` / `haar` | `auto` |
+| `--detector` | `auto` / `person` / `mediapipe` / `yunet` / `haar` | `auto` |
 | `--blur-method` | `pixelate` / `gaussian` | `pixelate` |
 | `--faces-json` | 놓친 얼굴 좌표를 직접 지정 | 없음 |
 | `--preview` | 540x960 저화질 빠른 확인 | 꺼짐 |
@@ -114,12 +129,16 @@ python make_shorts.py ./photos/과학실험 -d "..." --faces-json faces.json
 
 | 감지기 | 방식 | 준비 |
 | --- | --- | --- |
-| `person` | 사람 검출 + 자세 추정으로 머리를 찾음 (권장) | `pip install ultralytics` + `python scripts/download_models.py` |
-| `mediapipe` | 얼굴만 감지 | `pip install mediapipe` — 모델 내장 |
+| `person` | 사람 검출 + 자세 추정으로 머리를 찾음 (권장) | `pip install ultralytics mediapipe` + `python scripts/download_models.py` |
+| `mediapipe` | 얼굴만 감지 | `pip install mediapipe` (0.10.30+ 는 모델 다운로드 필요) |
 | `yunet` | 얼굴만 감지 | `python scripts/download_models.py` |
 | `haar` | 얼굴만 감지 | OpenCV 내장, 항상 사용 가능 |
 
 `auto`(기본값)는 `person` 이 준비돼 있으면 그것을, 아니면 얼굴 전용 감지기를 씁니다.
+준비되지 않은 감지기 때문에 실행이 멈추는 일은 없습니다. `auto` 는 초기화가 실패하면
+경고를 남기고 한 단계 아래 감지기로 내려가며, 어떤 신호를 못 썼는지는 실행 요약과
+`report.json` 의 `warnings` 에 남습니다. `person` 은 MediaPipe 를 못 쓰더라도 사람
+검출 결과만으로 머리 위치를 추정해 계속 동작합니다(정확도는 떨어집니다).
 
 ### 왜 얼굴 감지기만으로는 부족한가
 
@@ -144,6 +163,18 @@ python make_shorts.py ./photos/과학실험 -d "..." --faces-json faces.json
 ## 개발
 
 ```bash
-python -m pytest tests/ -m "not slow"   # 빠른 테스트 (약 5초)
-python -m pytest tests/                 # 실제 렌더링 포함 (약 20초)
+python -m pytest tests/ -m "not slow"   # 빠른 테스트 86개 (약 10초)
+python -m pytest tests/                 # 실제 렌더링 포함 92개 (약 30초)
 ```
+
+동작을 확인한 환경: Python 3.11 / numpy 2.4.6 / OpenCV 5.0.0 / moviepy 2.x /
+mediapipe 0.10.35 및 1.0.1 / ultralytics 8.4.
+
+### 자주 막히는 곳
+
+| 증상 | 원인과 해결 |
+| --- | --- |
+| `AttributeError: module 'mediapipe' has no attribute 'solutions'` | 이 저장소 최신 버전에서는 나지 않습니다. 예전 코드라면 업데이트하세요. |
+| `libGLESv2.so.2: cannot open shared object file` | 최신 mediapipe 의 시스템 의존성. `sudo apt install libgles2 libegl1` |
+| `한글 폰트를 찾지 못했습니다` | `sudo apt install fonts-nanum` 또는 `--font /경로/폰트.ttf` |
+| 실행 요약에 `MediaPipe 신호(...)를 쓸 수 없어` | `python scripts/download_models.py` 를 실행하세요. |
