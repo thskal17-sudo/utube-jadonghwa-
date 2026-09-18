@@ -63,3 +63,22 @@ def test_load_manual_boxes_rejects_bad_shape(tmp_path):
     f.write_text('{"a.jpg": [[1, 2, 3]]}', encoding="utf-8")
     with pytest.raises(ValueError):
         load_manual_boxes(f)
+
+
+def test_load_manual_boxes_ignores_comment_keys(tmp_path):
+    f = tmp_path / "faces.json"
+    f.write_text('{"_설명": "메모", "a.jpg": [[1, 2, 3, 4]]}', encoding="utf-8")
+    boxes = load_manual_boxes(f)
+    assert set(boxes) == {"a.jpg"}
+
+
+def test_example_faces_file_is_valid():
+    from pathlib import Path
+
+    example = Path(__file__).resolve().parent.parent / "examples" / "faces.example.json"
+    boxes = load_manual_boxes(example)
+    assert boxes
+    for name, bs in boxes.items():
+        assert not name.startswith("_")
+        for b in bs:
+            assert len(b) == 4 and all(isinstance(v, int) for v in b)

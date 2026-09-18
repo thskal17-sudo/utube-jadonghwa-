@@ -326,6 +326,8 @@ def load_manual_boxes(path: Path) -> dict:
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
     out = {}
     for name, boxes in raw.items():
+        if name.startswith("_"):
+            continue  # 밑줄로 시작하는 키는 주석으로 취급한다
         parsed = []
         for b in boxes:
             if len(b) != 4:
