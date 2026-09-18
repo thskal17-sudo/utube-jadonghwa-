@@ -40,6 +40,8 @@ class ShortsConfig:
     blur_padding: float = 0.35  # 감지 박스를 이만큼(비율) 넓혀서 블러
     blur_strength: float = 1.0
     manual_faces: Optional[Path] = None  # 놓친 얼굴 좌표 JSON
+    tight_blur: bool = False  # 차단 영역을 좁힘. 보기 좋지만 누락 위험이 커진다
+    keep_faces: tuple = ()  # 블러를 적용하지 않을 사진 파일명들
 
     # 자막
     font_path: Optional[Path] = None

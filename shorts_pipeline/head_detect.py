@@ -14,6 +14,10 @@
 셋을 합집합으로 합친다. 과잉 차단(얼굴 아닌 곳이 가려짐)은 보기에 아쉬울
 뿐이지만, 누락은 개인정보 노출이라 비용이 전혀 다르다.
 
+tight=True 로 두면 정확한 얼굴 박스가 덮는 거친 박스를 버려 훨씬 깔끔해지지만,
+실측에서 고개를 기울인 학생의 턱이 노출된 적이 있다. 검수를 반드시 거치는
+경우에만 쓸 것.
+
 YOLO 가중치(models/yolov8n.pt)가 없으면 이 감지기는 쓸 수 없고,
 파이프라인은 얼굴 전용 감지기로 자동 대체된다.
 """
@@ -53,6 +57,53 @@ def person_detector_available(weights: Optional[Path] = None) -> bool:
     return True
 
 
+def _contained_ratio(inner: Box, outer: Box) -> float:
+    """inner 가 outer 안에 얼마나 들어가 있는지(inner 면적 대비)."""
+    ix0, iy0, iw, ih = inner
+    ox0, oy0, ow, oh = outer
+    x0, y0 = max(ix0, ox0), max(iy0, oy0)
+    x1 = min(ix0 + iw, ox0 + ow)
+    y1 = min(iy0 + ih, oy0 + oh)
+    inter = max(0, x1 - x0) * max(0, y1 - y0)
+    area = max(1, iw * ih)
+    return inter / area
+
+
+def expand_box(box: Box, factor: float) -> Box:
+    """박스를 중심 기준으로 확대한다.
+
+    얼굴 감지기가 주는 박스는 눈·코·입만 감싸서 머리카락과 턱이 빠진다.
+    사람을 가리려면 머리 전체를 덮어야 하므로 넉넉히 키운다.
+    """
+    x, y, w, h = box
+    nw, nh = w * factor, h * factor
+    return (int(x - (nw - w) / 2), int(y - (nh - h) / 2), int(nw), int(nh))
+
+
+def prefer_precise(faces: Sequence[Box], coarse: Sequence[Box], cover: float = 0.6,
+                   redundant_area: float = 0.45) -> List[Box]:
+    """거친 박스가 확실히 불필요할 때만 버린다.
+
+    자세 추정과 기하 대비책이 만드는 박스는 실제 머리보다 크다. 전부 합집합으로
+    합치면 근접 사진에서 상반신이 통째로 모자이크된다. 그렇다고 얼굴 박스가 있다고
+    거친 박스를 무조건 버리면 머리카락과 턱이 노출된다(실측에서 실제로 발생).
+
+    그래서 얼굴 박스가 거친 박스와 크기까지 비슷할 때만 거친 쪽을 버린다. 얼굴
+    박스가 훨씬 작다면 그 거친 박스는 머리의 나머지를 덮고 있다는 뜻이므로 남긴다.
+    """
+    faces = list(faces)
+    kept: List[Box] = list(faces)
+    for cb in coarse:
+        cb_area = max(1, cb[2] * cb[3])
+        redundant = any(
+            _contained_ratio(fb, cb) >= cover and (fb[2] * fb[3]) / cb_area >= redundant_area
+            for fb in faces
+        )
+        if not redundant:
+            kept.append(cb)
+    return kept
+
+
 class PersonHeadDetector:
     """얼굴 + 사람/자세를 합쳐 '가려야 할 머리 영역'을 돌려준다."""
 
@@ -66,6 +117,8 @@ class PersonHeadDetector:
         tile_overlap: float = 0.25,
         tile_upscale: float = 2.0,
         head_expand: float = 1.15,
+        face_expand: float = 1.45,
+        tight: bool = False,
         fallback_scale: float = 0.62,
         yolo_imgsz: int = 1280,
     ):
@@ -76,6 +129,8 @@ class PersonHeadDetector:
         self.tile_overlap = tile_overlap
         self.tile_upscale = tile_upscale
         self.head_expand = head_expand
+        self.face_expand = face_expand
+        self.tight = tight
         self.fallback_scale = fallback_scale
         self.yolo_imgsz = yolo_imgsz
         self.backend = "person"
@@ -218,7 +273,17 @@ class PersonHeadDetector:
             pose_retried=retried, fallbacks=len(fallbacks),
         )
 
-        merged = merge_boxes([tuple(int(v) for v in b) for b in faces + heads + fallbacks], iou_thresh=0.35)
+        # 얼굴 박스는 이목구비만 감싸므로 머리 전체를 덮도록 키운다
+        face_boxes = merge_boxes(
+            [expand_box(tuple(int(v) for v in b), self.face_expand) for b in faces], iou_thresh=0.4
+        )
+        coarse = [tuple(int(v) for v in b) for b in heads + fallbacks]
+        if self.tight:
+            # 보기 좋은 대신 머리카락·턱이 샐 수 있다. 검수를 꼭 거칠 때만 쓴다.
+            candidates = prefer_precise(face_boxes, coarse)
+        else:
+            candidates = list(face_boxes) + coarse  # 기본값: 합집합, 누락보다 과잉 차단을 택한다
+        merged = merge_boxes(candidates, iou_thresh=0.45)
         clipped: List[Box] = []
         for x, y, w, h in merged:
             a, b_ = max(0, x), max(0, y)

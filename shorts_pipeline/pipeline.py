@@ -16,7 +16,10 @@ import numpy as np
 from .bgm import write_bgm
 from .captions import CaptionPlan, TemplateCaptionGenerator
 from .config import IMAGE_EXTENSIONS, SHORTS_MAX_SECONDS, SHORTS_MIN_SECONDS, ShortsConfig
-from .face_blur import FaceBlurResult, FaceDetector, blur_folder, load_image_rgb, load_manual_boxes
+from .face_blur import (
+    FaceBlurResult, FaceDetector, blur_folder, load_image_rgb,
+    load_manual_boxes, make_review_sheet,
+)
 from .fonts import find_korean_font
 from .head_detect import PersonHeadDetector, person_detector_available
 from .render import render_video
@@ -61,6 +64,22 @@ def collect_images(input_dir: Path, max_photos: int) -> List[Path]:
     return files
 
 
+def _reinsert_kept(photos, keep, blurred_results, out_dir: Path):
+    """블러를 건너뛴 사진을 원래 순서대로 다시 끼워 넣는다."""
+    import shutil
+
+    by_source = {r.source: r for r in blurred_results}
+    out: List[FaceBlurResult] = []
+    for i, src in enumerate(photos):
+        if src.name in keep:
+            dst = out_dir / f"{i:03d}_{src.stem}_keep{src.suffix.lower()}"
+            shutil.copy2(src, dst)
+            out.append(FaceBlurResult(source=src, output=dst, boxes=[], detector="keep"))
+        else:
+            out.append(by_source[src])
+    return out
+
+
 def build_detector(cfg: ShortsConfig):
     """설정에 맞는 감지기를 만든다.
 
@@ -68,9 +87,9 @@ def build_detector(cfg: ShortsConfig):
     감지기보다 누락이 훨씬 적기 때문이다. 준비돼 있지 않으면 얼굴 감지기로 내려간다.
     """
     if cfg.detector == "person":
-        return PersonHeadDetector(weights=cfg.yolo_weights)
+        return PersonHeadDetector(weights=cfg.yolo_weights, tight=cfg.tight_blur)
     if cfg.detector == "auto" and person_detector_available(cfg.yolo_weights):
-        return PersonHeadDetector(weights=cfg.yolo_weights)
+        return PersonHeadDetector(weights=cfg.yolo_weights, tight=cfg.tight_blur)
     backend = "auto" if cfg.detector == "auto" else cfg.detector
     return FaceDetector(backend=backend, yunet_model=cfg.yunet_model)
 
@@ -115,14 +134,28 @@ def run_pipeline(
             )
         review_sheet = work_dir / "review_sheet.jpg"
         manual = load_manual_boxes(cfg.manual_faces) if cfg.manual_faces else None
+        keep = {Path(n).name for n in cfg.keep_faces}
+        unknown = keep - {p.name for p in photos}
+        if unknown:
+            raise ValueError(
+                f"--keep-faces 에 적은 파일이 폴더에 없습니다: {', '.join(sorted(unknown))}"
+            )
+        to_blur = [p for p in photos if p.name not in keep]
         results = blur_folder(
-            photos, work_dir / "blurred", detector,
+            to_blur, work_dir / "blurred", detector,
             method=cfg.blur_method, padding=cfg.blur_padding, strength=cfg.blur_strength,
-            review_path=review_sheet, manual_boxes=manual,
+            review_path=None, manual_boxes=manual,
         )
+        if keep:
+            results = _reinsert_kept(photos, keep, results, work_dir / "blurred")
+            warnings.append(
+                f"블러를 적용하지 않은 사진: {', '.join(sorted(keep))} — "
+                "본인 또는 동의를 받은 사람만 지정했는지 확인하세요."
+            )
+        make_review_sheet(results, review_sheet)
         if sum(r.face_count for r in results) == 0:
             warnings.append("어떤 사진에서도 얼굴이 감지되지 않았습니다. 사진을 직접 확인하세요.")
-        no_face = [r.source.name for r in results if r.face_count == 0]
+        no_face = [r.source.name for r in results if r.face_count == 0 and r.detector != "keep"]
         if no_face and len(no_face) < len(results):
             warnings.append(f"얼굴이 하나도 감지되지 않은 사진: {', '.join(no_face)} — 검수 시트에서 확인하세요.")
     else:
@@ -155,7 +188,7 @@ def run_pipeline(
         resolution=f"{cfg.width}x{cfg.height}",
         photos_used=[str(p) for p in photos],
         faces_per_photo=[r.face_count for r in results],
-        detector=results[0].detector if results else "none",
+        detector=next((r.detector for r in results if r.detector != "keep"), "none"),
         review_sheet=str(review_sheet) if review_sheet else None,
         caption_plan=asdict(caption_plan),
         bgm=str(bgm_path),

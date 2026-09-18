@@ -75,3 +75,47 @@ def test_person_detector_records_stats():
     det.detect(np.full((320, 320, 3), 180, dtype=np.uint8))
     for key in ("persons", "faces", "pose_heads", "fallbacks"):
         assert key in det.last_stats
+
+
+def test_expand_box_grows_around_centre():
+    from shorts_pipeline.head_detect import expand_box
+
+    x, y, w, h = expand_box((100, 100, 100, 100), 2.0)
+    assert (w, h) == (200, 200)
+    assert (x + w / 2, y + h / 2) == (150, 150)  # 중심 유지
+
+
+def test_expand_box_identity():
+    from shorts_pipeline.head_detect import expand_box
+
+    assert expand_box((10, 20, 30, 40), 1.0) == (10, 20, 30, 40)
+
+
+def test_prefer_precise_keeps_coarse_when_face_is_much_smaller():
+    """얼굴 박스가 훨씬 작으면 거친 박스를 남겨야 한다.
+
+    실측에서 이걸 버렸더니 고개를 기울인 학생의 턱이 노출됐다.
+    """
+    from shorts_pipeline.head_detect import prefer_precise
+
+    face = (100, 100, 20, 20)       # 거친 박스 면적의 4%
+    coarse = (90, 90, 100, 100)
+    kept = prefer_precise([face], [coarse])
+    assert coarse in kept
+
+
+def test_prefer_precise_drops_redundant_coarse():
+    from shorts_pipeline.head_detect import prefer_precise
+
+    face = (100, 100, 90, 90)       # 거친 박스와 크기가 비슷 → 중복
+    coarse = (98, 98, 100, 100)
+    kept = prefer_precise([face], [coarse])
+    assert coarse not in kept
+    assert face in kept
+
+
+def test_prefer_precise_without_faces_keeps_everything():
+    from shorts_pipeline.head_detect import prefer_precise
+
+    coarse = [(0, 0, 10, 10), (50, 50, 20, 20)]
+    assert prefer_precise([], coarse) == coarse

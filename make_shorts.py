@@ -38,6 +38,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--blur-padding", type=float, default=0.35)
     p.add_argument("--faces-json", type=Path, default=None,
                    help='놓친 얼굴 좌표 JSON {"사진.jpg": [[x,y,w,h], ...]}')
+    p.add_argument("--keep-faces", nargs="*", default=[], metavar="파일명",
+                   help="블러를 적용하지 않을 사진 (예: 본인 사진). 파일명만 적습니다")
+    p.add_argument("--tight", action="store_true",
+                   help="차단 영역을 좁혀 보기 좋게 함. 누락 위험이 커지므로 검수 필수")
     p.add_argument("--no-blur", action="store_true", help="얼굴 블러 생략 (테스트 전용, 업로드 금지)")
     p.add_argument("--work-dir", type=Path, default=None, help="중간 산출물 폴더")
     p.add_argument("--seed", type=int, default=0, help="효과/BGM 변주 시드")
@@ -66,6 +70,8 @@ def main(argv=None) -> int:
         blur_method=args.blur_method,
         blur_padding=args.blur_padding,
         manual_faces=args.faces_json,
+        keep_faces=tuple(args.keep_faces),
+        tight_blur=args.tight,
         font_path=args.font,
         title=args.title,
         bgm_style=args.bgm,

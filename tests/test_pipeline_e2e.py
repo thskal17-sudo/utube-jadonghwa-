@@ -143,3 +143,19 @@ def test_cli_missing_folder_exits_nonzero(tmp_path):
         capture_output=True, text=True, cwd=Path(__file__).resolve().parent.parent,
     )
     assert proc.returncode != 0
+
+
+@pytest.mark.slow
+def test_keep_faces_skips_blur_and_warns(photo_dir, tmp_path):
+    cfg = ShortsConfig(width=270, height=480, fps=8, duration=4.0,
+                       preset="ultrafast", video_bitrate="500k", keep_faces=("p1.jpg",))
+    report = run_pipeline(photo_dir, "본인 사진 포함", tmp_path / "k.mp4", cfg, work_dir=tmp_path / "w")
+    assert any("블러를 적용하지 않은 사진" in w for w in report.warnings)
+    assert report.faces_per_photo[0] == 0
+    assert (tmp_path / "k.mp4").exists()
+
+
+def test_keep_faces_unknown_filename_raises(photo_dir, tmp_path):
+    cfg = ShortsConfig(width=270, height=480, fps=8, duration=4.0, keep_faces=("없는파일.jpg",))
+    with pytest.raises(ValueError, match="폴더에 없습니다"):
+        run_pipeline(photo_dir, "x", tmp_path / "x.mp4", cfg, work_dir=tmp_path / "w")
