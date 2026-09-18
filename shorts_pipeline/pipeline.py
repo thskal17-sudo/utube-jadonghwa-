@@ -18,6 +18,7 @@ from .captions import CaptionPlan, TemplateCaptionGenerator
 from .config import IMAGE_EXTENSIONS, SHORTS_MAX_SECONDS, SHORTS_MIN_SECONDS, ShortsConfig
 from .face_blur import FaceBlurResult, FaceDetector, blur_folder, load_image_rgb, load_manual_boxes
 from .fonts import find_korean_font
+from .head_detect import PersonHeadDetector, person_detector_available
 from .render import render_video
 
 log = logging.getLogger(__name__)
@@ -60,6 +61,20 @@ def collect_images(input_dir: Path, max_photos: int) -> List[Path]:
     return files
 
 
+def build_detector(cfg: ShortsConfig):
+    """설정에 맞는 감지기를 만든다.
+
+    auto 는 사람 검출 기반(person)을 우선한다. 교실 사진에서 얼굴 전용
+    감지기보다 누락이 훨씬 적기 때문이다. 준비돼 있지 않으면 얼굴 감지기로 내려간다.
+    """
+    if cfg.detector == "person":
+        return PersonHeadDetector(weights=cfg.yolo_weights)
+    if cfg.detector == "auto" and person_detector_available(cfg.yolo_weights):
+        return PersonHeadDetector(weights=cfg.yolo_weights)
+    backend = "auto" if cfg.detector == "auto" else cfg.detector
+    return FaceDetector(backend=backend, yunet_model=cfg.yunet_model)
+
+
 def run_pipeline(
     input_dir: Path,
     description: str,
@@ -86,11 +101,17 @@ def run_pipeline(
     # 1. 얼굴 블러
     review_sheet: Optional[Path] = None
     if cfg.blur:
-        detector = FaceDetector(backend=cfg.detector, yunet_model=cfg.yunet_model)
+        detector = build_detector(cfg)
         if detector.backend == "haar":
             warnings.append(
                 "Haar cascade 로 얼굴을 감지했습니다. 측면·작은 얼굴을 놓치기 쉬우니 "
                 "`pip install mediapipe` 후 다시 실행하는 것을 권장합니다."
+            )
+        elif detector.backend != "person":
+            warnings.append(
+                "얼굴 전용 감지기로 동작했습니다. 교실 사진에서는 고개를 숙이거나 뒤돌아 앉은 "
+                "학생을 놓칩니다. `pip install ultralytics` 후 "
+                "`python scripts/download_models.py` 를 실행하면 사람 검출 기반으로 훨씬 잘 잡습니다."
             )
         review_sheet = work_dir / "review_sheet.jpg"
         manual = load_manual_boxes(cfg.manual_faces) if cfg.manual_faces else None

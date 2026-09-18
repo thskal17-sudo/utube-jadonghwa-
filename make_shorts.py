@@ -30,9 +30,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--bgm", choices=sorted(STYLES), default="bright", help="BGM 스타일")
     p.add_argument("--bgm-volume", type=float, default=0.35)
     p.add_argument("--font", type=Path, default=None, help="한글 폰트 파일(TTF/OTF)")
-    p.add_argument("--detector", choices=["auto", "mediapipe", "yunet", "haar"], default="auto",
-                   help="얼굴 감지기 (auto: mediapipe → yunet → haar 순으로 자동 선택)")
+    p.add_argument("--detector", choices=["auto", "person", "mediapipe", "yunet", "haar"], default="auto",
+                   help="감지기 (auto: 사람검출 기반 → 얼굴 전용 순으로 자동 선택)")
     p.add_argument("--yunet-model", type=Path, default=None)
+    p.add_argument("--yolo-weights", type=Path, default=None, help="사람 검출 가중치 경로")
     p.add_argument("--blur-method", choices=["pixelate", "gaussian"], default="pixelate")
     p.add_argument("--blur-padding", type=float, default=0.35)
     p.add_argument("--faces-json", type=Path, default=None,
@@ -61,6 +62,7 @@ def main(argv=None) -> int:
         blur=not args.no_blur,
         detector=args.detector,
         yunet_model=args.yunet_model,
+        yolo_weights=args.yolo_weights,
         blur_method=args.blur_method,
         blur_padding=args.blur_padding,
         manual_faces=args.faces_json,

@@ -10,3 +10,8 @@ scipy>=1.11
 # 모델 파일이 패키지에 포함돼 있어 별도 다운로드가 필요 없습니다.
 # 없으면 OpenCV Haar cascade 로 자동 대체되지만 감지율이 크게 떨어집니다.
 mediapipe>=0.10.9,<0.11
+
+# 사람 검출 기반 감지 (교실 사진에 강력 권장)
+# 라이선스: AGPL-3.0. 외부 배포 시 확인 필요.
+# 설치 후 `python scripts/download_models.py` 로 가중치를 받으세요.
+ultralytics>=8.0,<9

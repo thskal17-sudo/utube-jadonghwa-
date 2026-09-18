@@ -33,8 +33,9 @@ class ShortsConfig:
 
     # 얼굴 블러
     blur: bool = True
-    detector: str = "auto"  # auto | mediapipe | yunet | haar
+    detector: str = "auto"  # auto | person | mediapipe | yunet | haar
     yunet_model: Optional[Path] = None
+    yolo_weights: Optional[Path] = None
     blur_method: str = "pixelate"  # pixelate | gaussian
     blur_padding: float = 0.35  # 감지 박스를 이만큼(비율) 넓혀서 블러
     blur_strength: float = 1.0

@@ -294,7 +294,7 @@ def make_review_sheet(results: Sequence[FaceBlurResult], path: Path, thumb_w: in
         h, w = img.shape[:2]
         th = int(h * thumb_w / w)
         tile = cv2.resize(img, (thumb_w, th), interpolation=cv2.INTER_AREA)
-        label = f"{r.source.name[:28]}  faces={r.face_count}"
+        label = f"{r.source.name[:28]}  blurred={r.face_count}"
         cv2.rectangle(tile, (0, 0), (thumb_w, 30), (0, 0, 0), -1)
         cv2.putText(tile, label, (6, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
         tiles.append(tile)
