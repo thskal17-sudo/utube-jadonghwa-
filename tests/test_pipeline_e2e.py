@@ -159,3 +159,44 @@ def test_keep_faces_unknown_filename_raises(photo_dir, tmp_path):
     cfg = ShortsConfig(width=270, height=480, fps=8, duration=4.0, keep_faces=("없는파일.jpg",))
     with pytest.raises(ValueError, match="폴더에 없습니다"):
         run_pipeline(photo_dir, "x", tmp_path / "x.mp4", cfg, work_dir=tmp_path / "w")
+
+
+def _blur_all(path: Path) -> None:
+    """사진 전체를 모자이크 처리한다(직접 블러한 사진을 흉내 낸다)."""
+    img = cv2.imread(str(path))
+    h, w = img.shape[:2]
+    small = cv2.resize(img, (max(1, w // 40), max(1, h // 40)), interpolation=cv2.INTER_LINEAR)
+    cv2.imwrite(str(path), cv2.resize(small, (w, h), interpolation=cv2.INTER_NEAREST))
+
+
+@pytest.mark.slow
+def test_verify_mode_does_not_reblur(tmp_path):
+    d = tmp_path / "photos"
+    d.mkdir()
+    for i in range(2):
+        make_photo(d / f"p{i}.jpg", 600, 800, i)
+        _blur_all(d / f"p{i}.jpg")
+    before = [(p.name, p.read_bytes()) for p in sorted(d.iterdir())]
+
+    cfg = ShortsConfig(width=270, height=480, fps=8, duration=4.0,
+                       preset="ultrafast", video_bitrate="500k", verify=True)
+    report = run_pipeline(d, "이미 가려진 사진", tmp_path / "v.mp4", cfg, work_dir=tmp_path / "w")
+
+    # 원본은 그대로여야 한다
+    assert before == [(p.name, p.read_bytes()) for p in sorted(d.iterdir())]
+    assert (tmp_path / "v.mp4").exists()
+    assert Path(report.review_sheet).exists()
+    assert report.detector.startswith("verify:")
+
+
+@pytest.mark.slow
+def test_verify_mode_reports_in_warnings(tmp_path):
+    d = tmp_path / "photos"
+    d.mkdir()
+    make_photo(d / "a.jpg", 600, 800, 3)
+    _blur_all(d / "a.jpg")
+    cfg = ShortsConfig(width=270, height=480, fps=8, duration=4.0,
+                       preset="ultrafast", video_bitrate="500k", verify=True)
+    report = run_pipeline(d, "검증", tmp_path / "v.mp4", cfg, work_dir=tmp_path / "w")
+    joined = " ".join(report.warnings)
+    assert "얼굴" in joined  # 노출 보고 또는 '선명한 얼굴은 없습니다'

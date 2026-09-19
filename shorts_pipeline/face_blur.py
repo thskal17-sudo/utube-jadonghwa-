@@ -38,10 +38,21 @@ class FaceBlurResult:
     output: Path
     boxes: List[Box] = field(default_factory=list)
     detector: str = "haar"
+    # 검증 모드에서만 채워진다
+    exposed: List[Box] = field(default_factory=list)   # 선명한 얼굴 (확실)
+    suspect: List[Box] = field(default_factory=list)   # 선명한 머리 추정 영역 (확인 필요)
 
     @property
     def face_count(self) -> int:
         return len(self.boxes)
+
+    @property
+    def exposed_count(self) -> int:
+        return len(self.exposed)
+
+    @property
+    def suspect_count(self) -> int:
+        return len(self.suspect)
 
 
 def load_image_rgb(path: Path) -> np.ndarray:
@@ -284,18 +295,34 @@ def draw_boxes(img_bgr: np.ndarray, boxes: Sequence[Box], color=(0, 255, 0), thi
 
 
 def make_review_sheet(results: Sequence[FaceBlurResult], path: Path, thumb_w: int = 480, cols: int = 3) -> Path:
-    """블러 결과를 격자로 모아 검수용 이미지를 만든다(초록 박스 = 블러 적용 위치)."""
+    """블러 결과를 격자로 모아 검수용 이미지를 만든다.
+
+    초록 = 가려진 위치. 노랑 = 확인이 필요한 선명한 영역. 빨강 = 선명한 얼굴.
+    심각한 것을 나중에 그려서 겹칠 때 눈에 먼저 들어오게 한다.
+    """
     tiles = []
     for r in results:
         img = cv2.imread(str(r.output))
         if img is None:
             continue
         img = draw_boxes(img, r.boxes)
+        if r.suspect:
+            img = draw_boxes(img, r.suspect, color=(0, 200, 255), thickness=4)  # 노랑: 확인 필요
+        if r.exposed:
+            img = draw_boxes(img, r.exposed, color=(0, 0, 255), thickness=6)    # 빨강: 확실한 노출
         h, w = img.shape[:2]
         th = int(h * thumb_w / w)
         tile = cv2.resize(img, (thumb_w, th), interpolation=cv2.INTER_AREA)
-        label = f"{r.source.name[:28]}  blurred={r.face_count}"
-        cv2.rectangle(tile, (0, 0), (thumb_w, 30), (0, 0, 0), -1)
+        if r.exposed:
+            label = f"{r.source.name[:20]}  EXPOSED={r.exposed_count}"
+            bar = (0, 0, 160)
+        elif r.suspect:
+            label = f"{r.source.name[:20]}  check={r.suspect_count}"
+            bar = (0, 90, 120)
+        else:
+            label = f"{r.source.name[:28]}  ok={r.face_count}"
+            bar = (0, 0, 0)
+        cv2.rectangle(tile, (0, 0), (thumb_w, 30), bar, -1)
         cv2.putText(tile, label, (6, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
         tiles.append(tile)
     if not tiles:

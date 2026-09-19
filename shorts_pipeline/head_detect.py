@@ -25,6 +25,7 @@ YOLO 가중치(models/yolov8n.pt)가 없으면 이 감지기는 쓸 수 없고,
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
@@ -102,6 +103,20 @@ def prefer_precise(faces: Sequence[Box], coarse: Sequence[Box], cover: float = 0
         if not redundant:
             kept.append(cb)
     return kept
+
+
+@dataclass
+class Detection:
+    """감지 결과를 신호별로 나눠 담는다.
+
+    검증 모드에서 신뢰도를 구분하려면 이 구분이 필요하다. 얼굴 감지기가
+    직접 잡은 영역은 '선명한 얼굴이 거기 있다'는 강한 근거지만, 자세 추정이
+    만든 영역은 손이나 인형을 사람 머리로 오인한 것일 수도 있다.
+    """
+
+    boxes: List[Box] = field(default_factory=list)        # 최종 병합 결과
+    face_boxes: List[Box] = field(default_factory=list)   # 얼굴 감지기가 잡은 영역
+    coarse_boxes: List[Box] = field(default_factory=list) # 자세 추정 + 기하 대비책
 
 
 class PersonHeadDetector:
@@ -241,6 +256,9 @@ class PersonHeadDetector:
 
     # ---------------- 통합 ----------------
     def detect(self, img_bgr: np.ndarray) -> List[Box]:
+        return self.detect_parts(img_bgr).boxes
+
+    def detect_parts(self, img_bgr: np.ndarray) -> Detection:
         H, W = img_bgr.shape[:2]
         faces = self._faces_whole(img_bgr) + self._faces_tiled(img_bgr)
 
@@ -284,10 +302,14 @@ class PersonHeadDetector:
         else:
             candidates = list(face_boxes) + coarse  # 기본값: 합집합, 누락보다 과잉 차단을 택한다
         merged = merge_boxes(candidates, iou_thresh=0.45)
-        clipped: List[Box] = []
-        for x, y, w, h in merged:
-            a, b_ = max(0, x), max(0, y)
-            c, d = min(W, x + w), min(H, y + h)
-            if c - a > 2 and d - b_ > 2:
-                clipped.append((a, b_, c - a, d - b_))
-        return clipped
+
+        def clip(bs):
+            out = []
+            for x, y, w, h in bs:
+                a, b_ = max(0, x), max(0, y)
+                c, d = min(W, x + w), min(H, y + h)
+                if c - a > 2 and d - b_ > 2:
+                    out.append((a, b_, c - a, d - b_))
+            return out
+
+        return Detection(boxes=clip(merged), face_boxes=clip(face_boxes), coarse_boxes=clip(coarse))

@@ -42,6 +42,7 @@ class ShortsConfig:
     manual_faces: Optional[Path] = None  # 놓친 얼굴 좌표 JSON
     tight_blur: bool = False  # 차단 영역을 좁힘. 보기 좋지만 누락 위험이 커진다
     keep_faces: tuple = ()  # 블러를 적용하지 않을 사진 파일명들
+    verify: bool = False  # 이미 가려진 사진을 검사만 한다(블러 재적용 안 함)
 
     # 자막
     font_path: Optional[Path] = None

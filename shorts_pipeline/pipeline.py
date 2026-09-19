@@ -22,6 +22,7 @@ from .face_blur import (
 )
 from .fonts import find_korean_font
 from .head_detect import PersonHeadDetector, person_detector_available
+from .verify import verify_detection
 from .render import render_video
 
 log = logging.getLogger(__name__)
@@ -80,6 +81,37 @@ def _reinsert_kept(photos, keep, blurred_results, out_dir: Path):
     return out
 
 
+def _verify_photos(photos, out_dir: Path, cfg: ShortsConfig):
+    """이미 가려진 사진을 검사한다. 블러는 새로 적용하지 않는다."""
+    import cv2
+
+    detector = build_detector(cfg)
+    if not hasattr(detector, "detect_parts"):
+        raise ValueError(
+            "--verify 는 사람 검출 기반 감지기가 필요합니다. "
+            "`pip install ultralytics` 후 `python scripts/download_models.py` 를 실행하세요."
+        )
+    out_dir.mkdir(parents=True, exist_ok=True)
+    results: List[FaceBlurResult] = []
+    exposed_total = suspect_total = 0
+    for i, src in enumerate(photos):
+        rgb = load_image_rgb(src)
+        bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+        detection = detector.detect_parts(bgr)
+        vr = verify_detection(bgr, detection)
+        dst = out_dir / f"{i:03d}_{src.stem}.jpg"
+        cv2.imwrite(str(dst), bgr, [cv2.IMWRITE_JPEG_QUALITY, 95])
+        results.append(FaceBlurResult(
+            source=src, output=dst, boxes=vr.protected,
+            detector=f"verify:{detector.backend}", exposed=vr.exposed, suspect=vr.suspect,
+        ))
+        exposed_total += len(vr.exposed)
+        suspect_total += len(vr.suspect)
+        log.info("[verify] %s → 가려짐 %d, 노출 %d, 확인필요 %d",
+                 src.name, len(vr.protected), len(vr.exposed), len(vr.suspect))
+    return results, exposed_total, suspect_total
+
+
 def build_detector(cfg: ShortsConfig):
     """설정에 맞는 감지기를 만든다.
 
@@ -117,9 +149,26 @@ def run_pipeline(
     log.info("[input] 사진 %d장 사용: %s", len(photos), ", ".join(p.name for p in photos))
     font_path = find_korean_font(cfg.font_path)
 
-    # 1. 얼굴 블러
+    # 1. 얼굴 블러 (또는 검증)
     review_sheet: Optional[Path] = None
-    if cfg.blur:
+    if cfg.verify:
+        review_sheet = work_dir / "review_sheet.jpg"
+        results, exposed_total, suspect_total = _verify_photos(photos, work_dir / "blurred", cfg)
+        make_review_sheet(results, review_sheet)
+        if exposed_total:
+            bad = [f"{r.source.name}({r.exposed_count})" for r in results if r.exposed]
+            warnings.append(
+                f"가려지지 않은 얼굴이 {exposed_total}곳 있습니다: {', '.join(bad)} — "
+                "검수 시트의 빨간 박스를 보고 해당 사진을 다시 처리한 뒤 실행하세요."
+            )
+        else:
+            warnings.append("얼굴 감지기가 찾은 선명한 얼굴은 없습니다.")
+        if suspect_total:
+            warnings.append(
+                f"확인이 필요한 영역이 {suspect_total}곳 있습니다(검수 시트의 노란 박스). "
+                "사람 머리로 추정됐지만 선명한 곳입니다. 손이나 사물인 경우가 많으니 눈으로 확인하세요."
+            )
+    elif cfg.blur:
         detector = build_detector(cfg)
         if detector.backend == "haar":
             warnings.append(

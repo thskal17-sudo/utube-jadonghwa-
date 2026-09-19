@@ -42,6 +42,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="블러를 적용하지 않을 사진 (예: 본인 사진). 파일명만 적습니다")
     p.add_argument("--tight", action="store_true",
                    help="차단 영역을 좁혀 보기 좋게 함. 누락 위험이 커지므로 검수 필수")
+    p.add_argument("--verify", action="store_true",
+                   help="이미 직접 블러한 사진용. 블러를 새로 적용하지 않고, 아직 선명한 얼굴이 "
+                        "남아 있는지만 검사해 검수 시트에 빨간 박스로 표시합니다")
     p.add_argument("--no-blur", action="store_true", help="얼굴 블러 생략 (테스트 전용, 업로드 금지)")
     p.add_argument("--work-dir", type=Path, default=None, help="중간 산출물 폴더")
     p.add_argument("--seed", type=int, default=0, help="효과/BGM 변주 시드")
@@ -64,6 +67,7 @@ def main(argv=None) -> int:
         duration=args.duration,
         max_photos=args.max_photos,
         blur=not args.no_blur,
+        verify=args.verify,
         detector=args.detector,
         yunet_model=args.yunet_model,
         yolo_weights=args.yolo_weights,
