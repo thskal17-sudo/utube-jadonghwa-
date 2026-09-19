@@ -15,6 +15,7 @@ import numpy as np
 
 from .bgm import write_bgm
 from .captions import CaptionPlan, TemplateCaptionGenerator
+from .claude_captions import ClaudeCaptionGenerator, generate_with_fallback
 from .config import IMAGE_EXTENSIONS, SHORTS_MAX_SECONDS, SHORTS_MIN_SECONDS, ShortsConfig
 from .face_blur import (
     FaceBlurResult, FaceDetector, blur_folder, load_image_rgb,
@@ -217,7 +218,18 @@ def run_pipeline(
             results.append(FaceBlurResult(source=src, output=dst, boxes=[], detector="none"))
 
     # 2·3. 자막 계획
-    if caption_plan is None:
+    if caption_plan is None and cfg.ai_captions:
+        # 반드시 블러 처리된 결과물을 넘긴다. 원본은 외부로 나가지 않는다.
+        safe_images = [r.output for r in results]
+        generator = ClaudeCaptionGenerator(
+            model=cfg.ai_model, effort=cfg.ai_effort, title=cfg.title, duration=cfg.duration
+        )
+        caption_plan, ai_warnings = generate_with_fallback(
+            description, safe_images, len(photos), generator=generator,
+            seed=cfg.seed, title=cfg.title,
+        )
+        warnings.extend(ai_warnings)
+    elif caption_plan is None:
         caption_plan = TemplateCaptionGenerator(title=cfg.title, seed=cfg.seed).generate(description, photos, len(photos))
     elif cfg.title:
         caption_plan = CaptionPlan(cfg.title, caption_plan.captions, caption_plan.hashtags)

@@ -25,6 +25,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-o", "--output", type=Path, default=None, help="출력 mp4 경로 (기본: output/<폴더명>.mp4)")
     p.add_argument("--title", default=None, help="상단 제목 (기본: 설명을 다듬어 자동 생성)")
     p.add_argument("--captions", type=Path, default=None, help="장면별 자막 JSON (title/captions/hashtags)")
+    p.add_argument("--ai-captions", action="store_true",
+                   help="Claude 가 사진을 보고 제목·자막을 생성합니다. 블러 처리된 사진만 전송되며, "
+                        "실패하면 기본 템플릿으로 대체됩니다 (영상 한 편당 약 $0.05)")
+    p.add_argument("--ai-model", default="claude-opus-5", help="자막 생성에 쓸 모델")
+    p.add_argument("--ai-effort", choices=["low", "medium", "high", "xhigh", "max"], default="medium",
+                   help="자막 생성 품질/비용 조절")
     p.add_argument("--duration", type=float, default=18.0, help="영상 길이(초), 15~20 권장")
     p.add_argument("--max-photos", type=int, default=8, help="사용할 최대 사진 수")
     p.add_argument("--bgm", choices=sorted(STYLES), default="bright", help="BGM 스타일")
@@ -78,6 +84,9 @@ def main(argv=None) -> int:
         tight_blur=args.tight,
         font_path=args.font,
         title=args.title,
+        ai_captions=args.ai_captions,
+        ai_model=args.ai_model,
+        ai_effort=args.ai_effort,
         bgm_style=args.bgm,
         bgm_volume=args.bgm_volume,
         seed=args.seed,

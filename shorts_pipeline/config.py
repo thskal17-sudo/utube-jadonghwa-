@@ -47,6 +47,9 @@ class ShortsConfig:
     # 자막
     font_path: Optional[Path] = None
     title: Optional[str] = None
+    ai_captions: bool = False           # Claude 가 사진을 보고 자막을 생성
+    ai_model: str = "claude-opus-5"
+    ai_effort: str = "medium"
 
     # BGM
     bgm_style: str = "bright"  # bright | calm | energetic

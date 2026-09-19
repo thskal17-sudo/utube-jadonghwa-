@@ -200,3 +200,72 @@ def test_verify_mode_reports_in_warnings(tmp_path):
     report = run_pipeline(d, "검증", tmp_path / "v.mp4", cfg, work_dir=tmp_path / "w")
     joined = " ".join(report.warnings)
     assert "얼굴" in joined  # 노출 보고 또는 '선명한 얼굴은 없습니다'
+
+
+@pytest.mark.slow
+def test_ai_captions_receive_blurred_photos_not_originals(photo_dir, tmp_path, monkeypatch):
+    """가장 중요한 속성: 원본 사진은 절대 외부로 나가지 않는다."""
+    from shorts_pipeline import claude_captions
+    from shorts_pipeline.captions import CaptionPlan
+
+    seen = {}
+
+    class Spy(claude_captions.ClaudeCaptionGenerator):
+        def generate(self, description, image_paths, n_scenes):
+            seen["paths"] = [Path(p) for p in image_paths]
+            return CaptionPlan("AI 제목", ["가", "나", "다"], ["#태그"])
+
+    monkeypatch.setattr(claude_captions, "ClaudeCaptionGenerator", Spy)
+    monkeypatch.setattr("shorts_pipeline.pipeline.ClaudeCaptionGenerator", Spy)
+
+    work = tmp_path / "w"
+    cfg = ShortsConfig(width=270, height=480, fps=8, duration=4.0,
+                       preset="ultrafast", video_bitrate="500k", ai_captions=True)
+    report = run_pipeline(photo_dir, "설명", tmp_path / "ai.mp4", cfg, work_dir=work)
+
+    assert seen["paths"], "자막 생성기가 호출되지 않았습니다"
+    blurred_dir = (work / "blurred").resolve()
+    for p in seen["paths"]:
+        assert p.resolve().parent == blurred_dir, f"원본이 전달됐습니다: {p}"
+        assert p.resolve().parent != photo_dir.resolve()
+    assert report.caption_plan["title"] == "AI 제목"
+
+
+@pytest.mark.slow
+def test_ai_caption_failure_falls_back_and_warns(photo_dir, tmp_path, monkeypatch):
+    from shorts_pipeline import claude_captions
+
+    class Failing(claude_captions.ClaudeCaptionGenerator):
+        def generate(self, description, image_paths, n_scenes):
+            raise claude_captions.CaptionGenerationError("테스트용 실패")
+
+    monkeypatch.setattr("shorts_pipeline.pipeline.ClaudeCaptionGenerator", Failing)
+    cfg = ShortsConfig(width=270, height=480, fps=8, duration=4.0,
+                       preset="ultrafast", video_bitrate="500k", ai_captions=True)
+    report = run_pipeline(photo_dir, "과학 실험", tmp_path / "f.mp4", cfg, work_dir=tmp_path / "w")
+
+    assert (tmp_path / "f.mp4").exists(), "자막 실패로 영상 생성까지 막히면 안 됩니다"
+    assert any("실패" in w for w in report.warnings)
+    assert report.caption_plan["captions"][0] == "과학 실험"
+
+
+@pytest.mark.slow
+def test_explicit_captions_file_skips_ai(photo_dir, tmp_path, monkeypatch):
+    from shorts_pipeline import claude_captions
+    from shorts_pipeline.captions import CaptionPlan
+
+    called = []
+
+    class Spy(claude_captions.ClaudeCaptionGenerator):
+        def generate(self, *a, **k):
+            called.append(1)
+            return CaptionPlan("안 쓰임", ["x"], [])
+
+    monkeypatch.setattr("shorts_pipeline.pipeline.ClaudeCaptionGenerator", Spy)
+    cfg = ShortsConfig(width=270, height=480, fps=8, duration=4.0,
+                       preset="ultrafast", video_bitrate="500k", ai_captions=True)
+    plan = CaptionPlan("직접 쓴 제목", ["내 자막"], [])
+    report = run_pipeline(photo_dir, "설명", tmp_path / "m.mp4", cfg,
+                          work_dir=tmp_path / "w", caption_plan=plan)
+    assert not called, "--captions 로 넘긴 파일이 있으면 AI 를 부르지 않아야 합니다"
+    assert report.caption_plan["title"] == "직접 쓴 제목"

@@ -15,3 +15,7 @@ mediapipe>=0.10.9,<0.11
 # 라이선스: AGPL-3.0. 외부 배포 시 확인 필요.
 # 설치 후 `python scripts/download_models.py` 로 가중치를 받으세요.
 ultralytics>=8.0,<9
+
+# 자동 자막 생성 (--ai-captions, 선택)
+# ANTHROPIC_API_KEY 환경변수가 필요합니다. 없으면 기본 템플릿으로 동작합니다.
+anthropic>=1.0,<2
