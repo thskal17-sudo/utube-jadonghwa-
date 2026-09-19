@@ -82,11 +82,23 @@ if errorlevel 1 goto :fail_extract
 rd /s /q "%TMPDIR%" >nul 2>&1
 del "%TMPZIP%" >nul 2>&1
 
-REM Embeddable Python ignores site-packages until this file is fixed.
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $d=[IO.Path]::GetFullPath('%PYDIR%'); $p=[IO.Directory]::GetFiles($d,'python*._pth')[0]; $t=[IO.File]::ReadAllLines($p); $t=$t -replace '^#\s*import site','import site'; if($t -notcontains 'import site'){$t+='import site'}; if($t -notcontains '..'){$t+='..'}; [IO.File]::WriteAllLines($p,$t)" >> "%LOG%" 2>&1
+:haspython
+
+REM ---------- step 1b: search path ----------
+REM This runs on EVERY launch, not only after a fresh download. A re-run must
+REM be able to repair a broken ._pth - that is the whole point of re-running.
+REM Embeddable Python ships a ._pth file that decides the entire search path.
+REM Until it lists Lib\site-packages, pip installs succeed but nothing imports.
+REM That exact failure happened in the field: "installed OK" then every single
+REM ModuleNotFoundError. Patching the file line by line was too fragile, so the
+REM whole file is rewritten with known-good contents. The first line must stay
+REM the version-specific zip name, so it is read back out before rewriting.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $d=[IO.Path]::GetFullPath('%PYDIR%'); $p=[IO.Directory]::GetFiles($d,'python*._pth')[0]; $old=[IO.File]::ReadAllLines($p); $zip=@($old | Where-Object {$_ -like '*.zip'})[0]; if(-not $zip){$zip='python311.zip'}; [IO.File]::WriteAllLines($p,@($zip,'.','Lib\site-packages','..','import site'))" >> "%LOG%" 2>&1
 if errorlevel 1 goto :fail_pth
 
-:haspython
+REM Prove it worked before spending 20 minutes on downloads.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $d=[IO.Path]::GetFullPath('%PYDIR%'); $p=[IO.Directory]::GetFiles($d,'python*._pth')[0]; Write-Output ('--- ._pth now reads ---'); [IO.File]::ReadAllText($p)" >> "%LOG%" 2>&1
+
 
 REM ---------- step 2: pip ----------
 "%PYEXE%" -m pip --version >nul 2>&1

@@ -71,6 +71,15 @@
 
  자주 있는 경우
   - 경로 관련 실패    : 폴더를 G:\shorts 로 옮기고 다시 실행하세요
+  - "설치 완료" 인데
+    전부 못 불러옴    : python 폴더의 python311._pth 파일을 메모장으로 열고
+                       아래 다섯 줄로 바꾼 뒤 저장, setup.bat 다시 실행
+
+                         python311.zip
+                         .
+                         Lib\site-packages
+                         ..
+                         import site
   - "다운로드 실패"   : 학교 방화벽 문제일 수 있습니다. 다른 네트워크에서 해 보세요
   - "공간 부족"       : USB 에 2GB 이상 남겨 두세요
   - "DLL" 오류        : 'Visual C++ Redistributable x64' 를 설치하세요

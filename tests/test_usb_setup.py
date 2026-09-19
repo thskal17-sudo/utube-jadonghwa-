@@ -211,3 +211,41 @@ def test_download_failure_suggests_another_network():
     """학교 방화벽이 원인인 경우가 많다."""
     blocks = _failure_blocks((USB / "setup.bat").read_text(encoding="ascii"))
     assert "network" in blocks["fail_download"].lower()
+
+
+def test_pth_rewrite_includes_site_packages():
+    """실제 설치 실패의 원인이었다.
+
+    휴대용 파이썬은 ._pth 파일에 적힌 경로만 검색한다. 거기에
+    Lib\\site-packages 가 없으면 pip 는 "설치 완료"라고 하는데 정작
+    import 는 전부 ModuleNotFoundError 가 난다.
+    """
+    text = (USB / "setup.bat").read_text(encoding="ascii")
+    assert "Lib\\site-packages" in text
+    assert "import site" in text
+
+
+def test_pth_rewrite_runs_on_every_launch():
+    """재실행으로 고칠 수 있어야 한다.
+
+    다운로드 블록 안에 두면 파이썬이 이미 있을 때 건너뛴다. 그러면
+    ._pth 가 깨진 상태로 영원히 남는다.
+    """
+    text = (USB / "setup.bat").read_text(encoding="ascii")
+    after_haspython = text.split("\n:haspython", 1)[1]
+    assert "_pth" in after_haspython, "._pth 수정이 재실행 경로에 없습니다"
+
+
+def test_pth_content_is_written_whole_not_patched():
+    """줄 단위 패치는 너무 깨지기 쉬웠다. 통째로 쓴다."""
+    text = (USB / "setup.bat").read_text(encoding="ascii")
+    assert "WriteAllLines" in text
+    assert "-replace '^#" not in text, "아직 정규식 패치가 남아 있습니다"
+
+
+def test_stage2_diagnoses_a_total_import_failure():
+    """전부 실패하면 설치가 아니라 경로 문제다. 그걸 알려줘야 한다."""
+    src = (USB / "setup_stage2.py").read_text(encoding="utf-8")
+    assert "len(missing) == len(checks)" in src
+    assert "sys.path" in src
+    assert "site-packages" in src

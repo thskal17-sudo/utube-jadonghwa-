@@ -152,6 +152,33 @@ def verify_imports() -> None:
     if not missing:
         return
 
+    # 전부 실패했다면 설치 자체가 아니라 검색 경로 문제일 가능성이 높다.
+    # 실제로 겪은 일이다: pip 는 "설치 완료"라고 했는데 하나도 못 불러왔다.
+    # 휴대용 파이썬의 ._pth 파일이 Lib\site-packages 를 빠뜨리면 이렇게 된다.
+    if len(missing) == len(checks):
+        log("")
+        log("    하나도 불러오지 못했습니다. 설치가 아니라 경로 문제로 보입니다.")
+        log("    파이썬이 찾고 있는 곳:")
+        for entry in sys.path:
+            log(f"      {entry}")
+        site_packages = Path(sys.executable).parent / "Lib" / "site-packages"
+        log(f"    라이브러리가 있어야 할 곳: {site_packages}")
+        log(f"    그 폴더가 실제로 있는가: {site_packages.is_dir()}")
+        if site_packages.is_dir():
+            found = sorted(p.name for p in site_packages.iterdir() if p.is_dir())[:10]
+            log(f"    그 안에 있는 것: {', '.join(found) if found else '(비어 있음)'}")
+        pth = sorted(Path(sys.executable).parent.glob("python*._pth"))
+        if pth:
+            log(f"    설정 파일 {pth[0].name} 의 내용:")
+            for line in pth[0].read_text(encoding="utf-8", errors="replace").splitlines():
+                log(f"      {line}")
+        fail(
+            "라이브러리를 찾지 못함",
+            "설치는 됐지만 파이썬이 그 폴더를 검색 경로에 넣지 않았습니다.",
+            "setup.bat 을 다시 실행하면 설정 파일을 새로 씁니다. "
+            "그래도 안 되면 위 내용을 그대로 보내주세요.",
+        )
+
     names = ", ".join(m for m, _, _ in missing)
     if any("DLL" in e or "_ssl" in e or "msvc" in e.lower() for _, _, e in missing):
         fix = ("Microsoft Visual C++ 재배포 패키지가 필요할 수 있습니다. "
