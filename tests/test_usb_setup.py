@@ -170,3 +170,44 @@ def test_mediapipe_actually_runs():
 
     fd = mp.solutions.face_detection.FaceDetection(model_selection=1, min_detection_confidence=0.5)
     fd.process(np.zeros((240, 320, 3), dtype=np.uint8))  # 예외가 나면 실패
+
+
+# ---------- 실제로 겪은 설치 실패 ----------
+def test_setup_bat_rejects_bracket_paths():
+    """대괄호가 든 경로에서 다운로드가 실패했다.
+
+    실제로 G:\\[안전폴더]... 에서 막혔다. PowerShell 은 대괄호를 와일드카드로
+    해석해서 -OutFile 이 조용히 실패한다. 미리 잡아서 무엇을 해야 하는지 알린다.
+    """
+    text = (USB / "setup.bat").read_text(encoding="ascii")
+    assert 'findstr /C:"["' in text
+    assert 'findstr /C:"]"' in text
+    assert "fail_badpath" in text
+
+
+def test_setup_bat_checks_path_length():
+    """경로가 길면 라이브러리 폴더가 260자를 넘어 윈도우가 깨진다."""
+    text = (USB / "setup.bat").read_text(encoding="ascii")
+    assert "fail_longpath" in text
+    assert "PLEN" in text
+
+
+def test_bad_path_message_says_what_to_do():
+    """'경로가 이상합니다' 만으로는 사용자가 할 수 있는 게 없다."""
+    blocks = _failure_blocks((USB / "setup.bat").read_text(encoding="ascii"))
+    for label in ("fail_badpath", "fail_longpath"):
+        assert label in blocks, f"{label} 블록이 없습니다"
+        assert "shorts" in blocks[label], f"{label} 이 대안 경로를 제시하지 않습니다"
+
+
+def test_downloads_go_through_temp_not_the_usb_path():
+    """USB 경로에 특수문자가 있어도 다운로드는 성공해야 한다."""
+    text = (USB / "setup.bat").read_text(encoding="ascii")
+    assert "%TEMP%" in text, "임시 폴더를 경유하지 않습니다"
+    assert "-OutFile '%ROOT%" not in text, "USB 경로로 직접 내려받고 있습니다"
+
+
+def test_download_failure_suggests_another_network():
+    """학교 방화벽이 원인인 경우가 많다."""
+    blocks = _failure_blocks((USB / "setup.bat").read_text(encoding="ascii"))
+    assert "network" in blocks["fail_download"].lower()
