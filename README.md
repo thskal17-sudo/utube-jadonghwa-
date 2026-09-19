@@ -16,10 +16,46 @@
 
 ## 설치
 
+### 윈도우 USB 설치 (학교 컴퓨터용)
+
+컴퓨터에 아무것도 설치하지 않고 USB 에서 바로 쓰는 방법입니다. 설치 권한이 막힌
+학교 컴퓨터에서도 동작합니다.
+
+1. 이 저장소를 ZIP 으로 내려받아 USB 에 풀어 넣습니다.
+2. `usb\setup.bat` 을 더블클릭합니다.
+3. 10~30분 기다립니다. 인터넷이 되는 곳에서 하세요.
+
+설치가 끝나면 USB 에 실행 파일 세 개가 생깁니다.
+
+| 파일 | 하는 일 |
+| --- | --- |
+| `watch_start.bat` | 폴더 감시를 켭니다. 사진만 넣으면 알아서 만듭니다 |
+| `make_one.bat` | 한 편씩 물어보며 만듭니다 |
+| `check_only.bat` | 무엇이 만들어질지 미리 봅니다 |
+
+자세한 사용법은 `usb/README.txt` 에 있습니다. 설치에 실패하면 `setup_log.txt` 가
+생기니 그 파일을 확인하세요.
+
+> **주의**: 이 설치 스크립트는 리눅스에서 만들어져 윈도우에서 검증되지 않았습니다.
+> 문제가 생기면 `setup_log.txt` 와 화면 메시지를 남겨 주세요.
+
+### 직접 설치 (맥·리눅스, 또는 파이썬이 이미 있는 윈도우)
+
+
 ```bash
 pip install -r requirements.txt
 python scripts/download_models.py    # 사람 검출 모델 (강력 권장)
 ```
+
+**용량 주의**: 기본 설치는 약 4.7GB 입니다. 그중 3.2GB 가 쓰지 않는 GPU 라이브러리입니다.
+CPU 전용으로 받으면 1GB 정도로 줄어듭니다.
+
+```bash
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+pip install -r requirements.txt
+```
+
+USB 설치 스크립트는 이미 CPU 전용으로 받습니다.
 
 `download_models.py` 는 인터넷 연결이 한 번 필요합니다. 건너뛰면 얼굴 전용 감지기로
 동작하는데, 교실 사진에서는 누락이 크게 늘어납니다.

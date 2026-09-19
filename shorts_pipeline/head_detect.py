@@ -25,6 +25,7 @@ YOLO 가중치(models/yolov8n.pt)가 없으면 이 감지기는 쓸 수 없고,
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
@@ -156,6 +157,10 @@ class PersonHeadDetector:
                 f"YOLO 가중치를 찾지 못했습니다: {path}\n"
                 "python scripts/download_models.py 로 내려받으세요."
             )
+        # ultralytics 는 필요하다고 판단하면 실행 중에 패키지를 자동 설치한다.
+        # 실제로 이것 때문에 protobuf 가 올라가면서 mediapipe 가 깨진 적이 있다.
+        # 설치 구성은 우리가 정한 대로 고정한다.
+        os.environ.setdefault("YOLO_AUTOINSTALL", "false")
         try:
             from ultralytics import YOLO
         except ImportError as e:
